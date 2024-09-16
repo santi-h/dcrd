@@ -54,6 +54,7 @@ func txOutToSpendableOut(tx *dcrutil.Tx, outputNum uint32, tree int8) spendableO
 // chain related functions that mining depends on.
 type fakeChain struct {
 	blocks                             map[chainhash.Hash]*dcrutil.Block
+	blockByHashErr                     error
 	bestState                          blockchain.BestState
 	calcNextRequiredDifficulty         uint32
 	calcNextRequiredDifficultyErr      error
@@ -97,6 +98,10 @@ func (c *fakeChain) BestSnapshot() *blockchain.BestState {
 // BlockByHash returns the block with the given hash from the fake chain
 // instance.  Blocks can be added to the instance with the AddBlock function.
 func (c *fakeChain) BlockByHash(hash *chainhash.Hash) (*dcrutil.Block, error) {
+	if c.blockByHashErr != nil {
+		return nil, c.blockByHashErr
+	}
+
 	block, ok := c.blocks[*hash]
 	if !ok {
 		return nil, fmt.Errorf("unable to find block %v in fake chain", hash)

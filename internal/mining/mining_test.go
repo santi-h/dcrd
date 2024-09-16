@@ -24,41 +24,83 @@ import (
 func TestNewBlockTemplateBasicErrorScenarios(t *testing.T) {
 	t.Parallel()
 
-	// Create a new mining harness instance.
-	harness, _, err := newMiningHarness(chaincfg.MainNetParams())
-	if err != nil {
-		t.Fatalf("error creating mining harness: %v", err)
-	}
+	params := chaincfg.MainNetParams()
 
 	// Create a test address for use in template generation.
 	address, err := stdaddr.DecodeAddress("Dsi8CRt85xYyempXs7ZPL1rBxvDdAGZmgsg",
-		harness.chainParams)
+		params)
 	if err != nil {
 		t.Fatalf("error decoding address: %v", err)
 	}
 
-	// Test error retrieving standard verify flags.
-	standardVerifyFlags := harness.policy.StandardVerifyFlags
-	var errFlags = errors.New("error retrieving standard verify flags")
-	harness.policy.StandardVerifyFlags = func() (txscript.ScriptFlags, error) {
-		return 0, errFlags
-	}
-	_, err = harness.generator.NewBlockTemplate(address)
-	if !errors.Is(err, errFlags) {
-		t.Fatalf("unexpected error retrieving standard verify flags -- got %v, "+
-			"want %v", err, errFlags)
-	}
-	harness.policy.StandardVerifyFlags = standardVerifyFlags
+	tests := []struct {
+		name    string
+		munge   func(harness *miningHarness, err error)
+		wantErr error
+	}{{
+		name: "error retrieving standard verify flags",
+		munge: func(harness *miningHarness, err error) {
+			harness.policy.StandardVerifyFlags = func() (txscript.ScriptFlags, error) {
+				return 0, err
+			}
+		},
+		wantErr: errors.New("error retrieving standard verify flags"),
+	}, {
+		name: "error retrieving treasury agenda",
+		munge: func(harness *miningHarness, err error) {
+			harness.chain.isTreasuryAgendaActiveErr = err
+		},
+		wantErr: errors.New("error retrieving treasury agenda"),
+	}, {
+		name: "error retrieving auto revocations agenda",
+		munge: func(harness *miningHarness, err error) {
+			harness.chain.isAutoRevocationsAgendaActiveErr = err
+		},
+		wantErr: errors.New("error retrieving auto revocations agenda"),
+	}, {
+		name: "error retrieving tip generation",
+		munge: func(harness *miningHarness, err error) {
+			harness.chain.bestState.Height =
+				harness.generator.cfg.ChainParams.StakeValidationHeight - 1
+			harness.chain.tipGenerationErr = err
+		},
+		wantErr: ErrFailedToGetGeneration,
+	}, {
+		// This tests that the ErrFailedToGetGeneration does not happen if the best
+		// state height is less than the stake validation height - 1.
+		name: "error retrieving tip generation edge case",
+		munge: func(harness *miningHarness, _ error) {
+			harness.chain.bestState.Height =
+				harness.generator.cfg.ChainParams.StakeValidationHeight - 2
+			harness.chain.tipGenerationErr = ErrFailedToGetGeneration
+		},
+		wantErr: nil,
+	}, {
+		name: "error retrieving top block during handleTooFewVoters",
+		munge: func(harness *miningHarness, _ error) {
+			harness.chain.bestState.Height =
+				harness.generator.cfg.ChainParams.StakeValidationHeight - 1
 
-	// Test error retrieving treasury agenda.
-	var errTreasuryAgenda = errors.New("error retrieving treasury agenda")
-	harness.chain.isTreasuryAgendaActiveErr = errTreasuryAgenda
-	_, err = harness.generator.NewBlockTemplate(address)
-	if !errors.Is(err, errTreasuryAgenda) {
-		t.Fatalf("unexpected error retrieving treasury agenda -- got %v, want %v",
-			err, errTreasuryAgenda)
+			harness.chain.blockByHashErr = errors.New("error during BlockByHash")
+		},
+		wantErr: ErrGetTopBlock,
+	}}
+
+	for _, test := range tests {
+		harness, _, err := newMiningHarness(params)
+		if err != nil {
+			t.Fatalf("error creating mining harness: %v", err)
+		}
+
+		test.munge(harness, test.wantErr)
+
+		_, err = harness.generator.NewBlockTemplate(address)
+
+		if !errors.Is(err, test.wantErr) {
+			t.Errorf("%q: mismatched error -- got %v, want %v", test.name, err,
+				test.wantErr)
+		}
 	}
-	harness.chain.isTreasuryAgendaActiveErr = nil
 }
 
 // TestNewBlockTemplate tests the generation of a new block template containing
